@@ -1,0 +1,277 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rhythm Copycat</title>
+<style>
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  background: #edf3ff;
+  color: #19294d;
+  text-align: center;
+}
+main {
+  max-width: 500px;
+  margin: 30px auto;
+  padding: 20px;
+}
+h1 { font-size: 32px; }
+.beats {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin: 28px 0;
+}
+.beat {
+  background: white;
+  border-radius: 15px;
+  padding: 18px 12px;
+  font-size: 30px;
+  transition: .15s;
+}
+.active {
+  background: #ffd05e;
+  transform: scale(1.15);
+}
+button {
+  width: 100%;
+  padding: 17px;
+  margin: 9px 0;
+  border: 0;
+  border-radius: 14px;
+  background: #315de6;
+  color: white;
+  font-size: 18px;
+  font-weight: bold;
+  cursor: pointer;
+}
+button:disabled { opacity: .45; }
+#tap { background: #ed8c25; }
+#status {
+  background: white;
+  padding: 20px;
+  border-radius: 15px;
+  min-height: 70px;
+  margin-top: 20px;
+}
+input { width: 100%; }
+</style>
+</head>
+<body>
+<main>
+<h1>🥁 Rhythm Copycat</h1>
+<p>Listen to the beat, then clap it back!</p>
+
+<div class="beats">
+  <div class="beat">👏</div>
+  <div class="beat">👏</div>
+  <div class="beat">·</div>
+  <div class="beat">👏</div>
+</div>
+
+<button id="mic">🎤 Enable Microphone</button>
+<button id="play" disabled>▶ Play and Copy</button>
+<button id="manual">👆 Test Without Microphone</button>
+<button id="tap" hidden>👏 TAP HERE</button>
+
+<p>Microphone sensitivity</p>
+<input id="sensitivity" type="range"
+ min="0.015" max="0.18" step="0.005"
+ value="0.055">
+
+<div id="status">Enable the microphone to begin.</div>
+<p id="count">Detected claps: 0</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const beats = [...document.querySelectorAll(".beat")];
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+let audio, analyser, data;
+let listening = false;
+let hits = [];
+let started = 0;
+let lastHit = -10000;
+let baseline = 0;
+let busy = false;
+let frame;
+
+function message(t) {
+  $("status").textContent = t;
+}
+
+function flash(i) {
+  beats[i].classList.add("active");
+  setTimeout(() => beats[i].classList.remove("active"), 180);
+}
+
+async function audioReady() {
+  audio ||= new (window.AudioContext ||
+    window.webkitAudioContext)();
+  await audio.resume();
+}
+
+function beep() {
+  const o = audio.createOscillator();
+  const g = audio.createGain();
+  const t = audio.currentTime;
+
+  o.frequency.setValueAtTime(850, t);
+  o.frequency.exponentialRampToValueAtTime(300, t + .07);
+  g.gain.setValueAtTime(.15, t);
+  g.gain.exponentialRampToValueAtTime(.001, t + .09);
+
+  o.connect(g).connect(audio.destination);
+  o.start(t);
+  o.stop(t + .1);
+}
+
+$("mic").onclick = async () => {
+  try {
+    await audioReady();
+
+    const stream =
+      await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false
+        }
+      });
+
+    analyser = audio.createAnalyser();
+    analyser.fftSize = 1024;
+    data = new Float32Array(analyser.fftSize);
+
+    audio.createMediaStreamSource(stream)
+      .connect(analyser);
+
+    $("play").disabled = false;
+    message("Microphone ready! Press Play and Copy.");
+  } catch (e) {
+    message("Microphone error: " + e.name +
+      ". Check browser permissions and HTTPS.");
+  }
+};
+
+function detect() {
+  if (!listening) return;
+
+  analyser.getFloatTimeDomainData(data);
+
+  let sum = 0;
+  for (const v of data) sum += v * v;
+
+  const volume = Math.sqrt(sum / data.length);
+  const now = performance.now();
+  const threshold = Number($("sensitivity").value);
+
+  if (
+    volume > threshold &&
+    volume > baseline * 1.55 &&
+    now - lastHit > 210
+  ) {
+    addHit(now);
+  }
+
+  baseline = baseline * .8 + volume * .2;
+  frame = requestAnimationFrame(detect);
+}
+
+function addHit(now) {
+  hits.push(now - started);
+  lastHit = now;
+  $("count").textContent =
+    "Detected claps: " + hits.length;
+}
+
+function result() {
+  if (hits.length !== 3) {
+    message("I heard " + hits.length +
+      " claps. Try the three-clap pattern again!");
+    return;
+  }
+
+  const first = hits[1] - hits[0];
+  const second = hits[2] - hits[1];
+
+  if (
+    Math.abs(first - 500) < 300 &&
+    Math.abs(second - 1000) < 350
+  ) {
+    message("🎉 Fantastic! You copied the rhythm!");
+  } else {
+    message("🌟 Nice try! Listen for the longer pause before the last clap.");
+  }
+}
+
+async function play(manual) {
+  if (busy) return;
+
+  busy = true;
+  $("play").disabled = true;
+  $("manual").disabled = true;
+  $("tap").hidden = true;
+
+  hits = [];
+  $("count").textContent = "Detected claps: 0";
+
+  try {
+    await audioReady();
+    message("Listen carefully...");
+    await sleep(400);
+
+    for (let i = 0; i < 4; i++) {
+      if (i > 0) await sleep(500);
+      if (i !== 2) {
+        beep();
+        flash(i);
+      }
+    }
+
+    await sleep(700);
+    message("Your turn! Clap the rhythm!");
+
+    started = performance.now();
+    lastHit = -10000;
+    baseline = 0;
+    listening = true;
+
+    if (manual) {
+      $("tap").hidden = false;
+    } else {
+      detect();
+    }
+
+    await sleep(2700);
+
+    listening = false;
+    cancelAnimationFrame(frame);
+    $("tap").hidden = true;
+    result();
+  } finally {
+    busy = false;
+    $("play").disabled = !analyser;
+    $("manual").disabled = false;
+  }
+}
+
+$("tap").onclick = () => {
+  if (
+    listening &&
+    performance.now() - lastHit > 120
+  ) {
+    addHit(performance.now());
+  }
+};
+
+$("play").onclick = () => play(false);
+$("manual").onclick = () => play(true);
+</script>
+</body>
+</html>
